@@ -1,94 +1,305 @@
-# diffusion-pipe
-A pipeline parallel training script for diffusion models.
+# Diffusion-Pipe GH200
 
-Currently supports Flux, LTX-Video, and HunyuanVideo.
+A high-performance diffusion model training pipeline optimized for NVIDIA GH200 Grace Hopper architecture, with a focus on video generation models like HunyuanVideo.
 
-**Work in progress and highly experimental.** It is unstable and not well tested. Things might not work right.
+## Overview
 
-## Features
-- Pipeline parallelism, for training models larger than can fit on a single GPU
-- Full fine tune support for:
-    - Flux
-- LoRA support for:
-    - Flux, LTX-Video, HunyuanVideo
-- Useful metrics logged to Tensorboard
-- Compute metrics on a held-out eval set, for measuring generalization
-- Training state checkpointing and resuming from checkpoint
-- Efficient multi-process, multi-GPU pre-caching of latents and text embeddings
-- Easily add support for new models by implementing a single subclass
+This project provides a specialized training pipeline that leverages the unique capabilities of the NVIDIA GH200 architecture:
+- Unified CPU-GPU memory architecture with optimized memory management
+- Enhanced NVLink bandwidth utilization through event-based monitoring
+- FP8/BF16 acceleration with automatic mixed precision
+- Large-scale pipeline parallelism with dynamic load balancing
 
+Key features:
+- DeepSpeed ZeRO-2 integration with GH200-specific optimizations
+- Advanced performance monitoring system with real-time metrics
+- Efficient video model training support with pipeline parallelism
+- Automatic resource management and cleanup
+- Comprehensive error handling and recovery
 
-## Windows support
-There are reports that it doesn't work on Windows. This is because Deepspeed only has [partial Windows support](https://github.com/microsoft/DeepSpeed/blob/master/blogs/windows/08-2024/README.md). However, at least one user was able to get it running and training successfully on Windows Subsystem for Linux, specifically WSL 2. If you must use Windows I recommend trying WSL 2.
+## Technical Details
 
+### GH200 Optimizations
 
-## Installing
-Clone the repository:
+1. Memory Management
+   - Unified memory optimization with dynamic page migration
+   - Smart CPU offloading with pinned memory
+   - Automatic buffer size adjustment
+   - Efficient gradient accumulation
+
+2. Communication
+   - NVLink-aware data transfer
+   - Optimized collective operations
+   - Efficient pipeline scheduling
+   - Reduced CPU-GPU synchronization
+
+3. Computation
+   - FP8 transformer operations
+   - BF16 activation checkpointing
+   - Efficient pipeline bubbles
+   - Dynamic batch sizing
+
+### Performance Monitoring
+
+The monitoring system includes:
+
+1. Memory Tracking
+```python
+class GH200PerformanceMonitor:
+    def log_memory_stats(self):
+        # Track unified memory
+        memory_stats = {
+            'unified_used': stats.get('unified_used', 0),
+            'unified_free': stats.get('unified_free', 0),
+            'cpu_page_faults': stats.get('cpu_page_faults', 0)
+        }
 ```
-git clone --recurse-submodules https://github.com/tdrussell/diffusion-pipe
+
+2. NVLink Monitoring
+```python
+    def nvlink_measurement(self):
+        # Event-based bandwidth measurement
+        with cuda.Event() as start, cuda.Event() as end:
+            start.record()
+            # Operation
+            end.record()
+            # Calculate bandwidth
 ```
 
-If you alread cloned it and forgot to do --recurse-submodules:
-```
-git submodule init
-git submodule update
-```
-
-Install Miniconda: https://docs.anaconda.com/miniconda/
-
-Create the environment:
-```
-conda create -n diffusion-pipe python=3.12
-conda activate diffusion-pipe
+3. Pipeline Statistics
+```python
+    def log_pipeline_stats(self):
+        # Track efficiency
+        stats = {
+            'pipeline_parallel_size': size,
+            'micro_batch_size': batch_size,
+            'gradient_accumulation_steps': steps
+        }
 ```
 
-Install nvcc: https://anaconda.org/nvidia/cuda-nvcc. Probably try to make it match the CUDA version that was installed on your system with PyTorch.
+## Architecture
 
-Install the dependencies:
+### Core Components
+
+1. Training Pipeline (`train.py`)
+   - Distributed training coordination
+   - Pipeline stage management
+   - Memory optimization
+   - Gradient synchronization
+
+2. Performance Monitoring (`utils/monitoring.py`, `utils/gh200_monitoring.py`)
+   - Base monitoring infrastructure
+   - GH200-specific metrics
+   - Resource tracking
+   - Error handling
+
+3. Model Support (`models/`)
+   - HunyuanVideo integration
+   - Model wrapper architecture
+   - Pipeline adaptation
+   - Mixed precision support
+
+## Configuration System
+
+The configuration system uses TOML files with comprehensive settings:
+
+### Base Configuration (`configs/gh200_config.toml`)
+```toml
+# Training settings
+epochs = 1000
+micro_batch_size_per_gpu = 1
+pipeline_stages = 4
+gradient_accumulation_steps = 4
+
+# GH200 optimizations
+[ds_config.zero_optimization]
+stage = 2
+cpu_offload = true
+overlap_comm = true
+contiguous_gradients = true
+stage3_prefetch_bucket_size = 1e9
+offload_optimizer = {
+    device = "cpu",
+    pin_memory = true,
+    buffer_count = 4
+}
 ```
+
+### Model-Specific Configuration (`configs/hunyuan_video_gh200.toml`)
+```toml
+[model]
+type = "hunyuan-video"
+dtype = "bfloat16"
+transformer_dtype = "float8"  # GH200 optimized
+
+[monitoring]
+wall_clock_breakdown = true
+memory_breakdown = true
+nvlink_monitoring = true
+unified_memory_monitoring = true
+```
+
+## Implementation Details
+
+### Memory Management
+
+1. Unified Memory
+```python
+# Optimized memory allocation
+torch.cuda.set_device(dist.get_rank())
+torch.cuda.memory.set_per_process_memory_fraction(0.9)
+```
+
+2. Pipeline Buffers
+```python
+# Efficient pipeline buffer management
+pipeline_buffers = {
+    'activation': torch.cuda.caching_allocator.allocate(),
+    'gradient': torch.cuda.caching_allocator.allocate()
+}
+```
+
+3. Resource Cleanup
+```python
+def cleanup(self):
+    """Ensure proper resource deallocation"""
+    try:
+        self.reset_metrics()
+        if self.grad_scaler:
+            del self.grad_scaler
+    except Exception as e:
+        logger.warning(f"Cleanup error: {e}")
+```
+
+### Error Handling
+
+1. Metric Collection
+```python
+try:
+    memory_stats = torch.cuda.memory_stats()
+    metrics.update({
+        'allocated': memory_stats.get('allocated_bytes.all.current', 0),
+        'reserved': memory_stats.get('reserved_bytes.all.current', 0)
+    })
+except Exception as e:
+    logger.warning(f"Failed to collect metrics: {e}")
+```
+
+2. Resource Management
+```python
+@contextmanager
+def track_step(self, step):
+    """Safe step tracking with cleanup"""
+    try:
+        yield
+    finally:
+        self.cleanup_step_resources()
+```
+
+## Setup and Installation
+
+1. System Requirements
+   - NVIDIA GH200 GPU(s)
+   - CUDA 12.0+
+   - Python 3.8+
+   - DeepSpeed 0.10.0+
+
+2. Installation
+```bash
+# Clone the repository
+git clone https://github.com/your-org/diffusion-pipe-gh200
+cd diffusion-pipe-gh200
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Optional: Install development dependencies
+pip install -r requirements-dev.txt
 ```
 
-## Training
-**Start by reading through the config files in the examples directory.** Almost everything is commented, explaining what each setting does.
-
-Once you've familiarized yourself with the config file format, go ahead and make a copy and edit to your liking. At minimum, change all the paths to conform to your setup, including the paths in the dataset config file.
-
-Launch training like this:
+3. Configuration
+```bash
+# Copy and modify example configs
+cp examples/hunyuan_video.toml configs/my_training.toml
+# Edit paths and parameters as needed
 ```
-NCCL_P2P_DISABLE="1" NCCL_IB_DISABLE="1" deepspeed --num_gpus=1 train.py --deepspeed --config examples/hunyuan_video.toml
+
+## Usage
+
+### Basic Training
+```bash
+# Single GPU training
+python train.py --config configs/hunyuan_video_gh200.toml
+
+# Multi-GPU training
+deepspeed train.py --config configs/hunyuan_video_gh200.toml
 ```
-RTX 4000 series needs those 2 environment variables set. Other GPUs may not need them. You can try without them, Deepspeed will complain if it's wrong.
 
-If you enabled checkpointing, you can resume training from the latest checkpoint by simply re-running the exact same command but with the ```--resume_from_checkpoint``` flag.
+### Advanced Options
+```bash
+# Resume from checkpoint with memory optimization
+python train.py --config configs/hunyuan_video_gh200.toml \
+    --resume_from_checkpoint \
+    --memory_efficient_training
 
-## Output files
-A new directory will be created in ```output_dir``` for each training run. This contains the checkpoints, saved models, and Tensorboard metrics. Saved models/LoRAs will be in directories named like epoch1, epoch2, etc. Deepspeed checkpoints are in directories named like global_step1234. These checkpoints contain all training state, including weights, optimizer, and dataloader state, but can't be used directly for inference. The saved model directory will have the safetensors weights, PEFT adapter config JSON, as well as the diffusion-pipe config file for easier tracking of training run settings.
+# Cache only mode for dataset preparation
+python train.py --config configs/hunyuan_video_gh200.toml --cache_only
+```
 
-## VRAM requirements
-### Flux
-Flux doesn't currently support training a LoRA on a fp8 base model (if you want this, PRs are welcome :) ). So you need to use a >24GB GPU, or use pipeline_stages=2 or higher with multiple 24GB cards. With four 24GB GPUs, you can even full finetune Flux with the right techniques (see the train.py code about gradient release and the custom AdamW8bitKahan optimizer).
+## Performance Monitoring
 
-### HunyuanVideo
-HunyuanVideo supports fp8 transformer. The example config file will train a HunyuanVideo LoRA, on images only, in well under 24GB of VRAM. You can probably bump the resolution to 1024x1024 or higher.
+Access monitoring data through TensorBoard:
+```bash
+tensorboard --logdir outputs/hunyuan_video_gh200
+```
 
-Video uses A LOT more memory. I was able to train a rank 32 LoRA on 512x512x33 sized videos in just under 23GB VRAM usage. Pipeline parallelism will help a bit if you have multiple GPUs, since the model weights will be further divided among them (but it doesn't help with the huge activation memory use of videos). Long term I want to eventually implement ring attention and/or Deepspeed Ulysses for parallelizing the sequence dimension across GPUs, which should greatly help for training on videos.
+Available metrics:
+1. Training Metrics
+   - Loss curves
+   - Learning rates
+   - Gradient norms
+   - Parameter statistics
 
-### LTX-Video
-I've barely done any training on LTX-Video. The model is much lighter than Hunyuan, and the latent space more compressed, so it uses less memory. You can train loras even on video at a reasonable length (I forgot exactly what it was) on 24GB.
+2. Memory Metrics
+   - Unified memory utilization
+   - GPU memory allocation
+   - CPU memory usage
+   - Page fault statistics
 
-## Parallelism
-This code uses hybrid data- and pipeline-parallelism. Set the ```--num_gpus``` flag appropriately for your setup. Set ```pipeline_stages``` in the config file to control the degree of pipeline parallelism. Then the data parallelism degree will automatically be set to use all GPUs (number of GPUs must be divisible by pipeline_stages). For example, with 4 GPUs and pipeline_stages=2, you will run two instances of the model, each divided across two GPUs. Note that due to a weird bug I'm still investigating, pipeline_stages>1 doesn't work with HunyuanVideo.
+3. Performance Metrics
+   - NVLink bandwidth
+   - Pipeline efficiency
+   - Throughput
+   - Step timing
 
-## Pre-caching
-Latents and text embeddings are cached to disk before training happens. This way, the VAE and text encoders don't need to be kept loaded during training. The Huggingface Datasets library is used for all the caching. Cache files are reused between training runs if they exist. All cache files are written into a directory named "cache" inside each dataset directory.
+4. Resource Metrics
+   - GPU utilization
+   - CPU utilization
+   - Memory transfer rates
+   - Pipeline balance
 
-This caching also means that training LoRAs for text encoders is not currently supported.
+## Contributing
 
-Two flags are relevant for caching. ```--cache_only``` does the caching flow, then exits without training anything. ```--regenerate_cache``` forces cache regeneration. If you edit the dataset in-place (like changing a caption), you need to force regenerate the cache (or delete the cache dir) for the changes to be picked up.
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request with:
+   - Clear description
+   - Test coverage
+   - Documentation updates
 
-## HunyuanVideo LoRAs
-HunyuanVideo doesn't have an official Diffusers integration yet, and as such it doesn't have an official LoRA format. This script outputs the LoRA using the typical Diffusers convention, i.e. the state_dict keys are all prefixed with "transformer.". This will work with the latest version of the ComfyUI HunyuanVideoWrapper extension, and is likely to work with Diffusers whenever HunyuanVideo is officially integrated. Make sure the HunyuanVideoWrapper extension is fully updated, and use the "HunyuanVideo Lora Select" node.
+## License
 
-## Extra
-You can check out my [qlora-pipe](https://github.com/tdrussell/qlora-pipe) project, which is basically the same thing as this but for LLMs.
+This project is licensed under [LICENSE]. See the LICENSE file for details.
+
+## Citation
+
+If you use this project in your research, please cite:
+```bibtex
+@software{diffusion_pipe_gh200,
+  title = {Diffusion-Pipe GH200},
+  author = {Your Organization},
+  year = {2024},
+  url = {https://github.com/your-org/diffusion-pipe-gh200},
+  description = {High-performance diffusion model training pipeline optimized for NVIDIA GH200}
+}
+```

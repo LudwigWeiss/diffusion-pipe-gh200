@@ -1,34 +1,100 @@
 # HunyuanVideo configuration with GH200 optimizations
+output_dir = "outputs/hunyuan_video_gh200"
+dataset = "examples/dataset.toml"
+
+# Training settings
+epochs = 1000
+micro_batch_size_per_gpu = 1
+pipeline_stages = 4
+gradient_accumulation_steps = 4
+gradient_clipping = 1.0
+warmup_steps = 1000
+
+# Evaluation settings
+eval_every_n_epochs = 1
+eval_before_first_step = true
+eval_micro_batch_size_per_gpu = 1
+eval_gradient_accumulation_steps = 1
+
+# Checkpoint settings
+save_every_n_epochs = 2
+checkpoint_every_n_minutes = 120
+activation_checkpointing = true
+partition_method = "parameters"
+save_dtype = "bfloat16"
+caching_batch_size = 1
+steps_per_print = 1
+video_clip_mode = "single_middle"
+
+# Model configuration
 [model]
 type = "hunyuan-video"
-dtype = "float16"
-transformer_dtype = "float16"
+transformer_path = "/path/to/hunyuan_video_comfyui/hunyuan_video_720_cfgdistill_fp8_e4m3fn.safetensors"
+vae_path = "/path/to/hunyuan_video_comfyui/hunyuan_video_vae_bf16.safetensors"
+llm_path = "/path/to/hunyuan_video_comfyui/llava-llama-3-8b-text-encoder-tokenizer"
+clip_path = "/path/to/hunyuan_video_comfyui/clip-vit-large-patch14"
+dtype = "bfloat16"
+transformer_dtype = "float8"  # Optimized for GH200
+timestep_sample_method = "logit_normal"
+guidance = 1.0
 
+# GH200-specific settings
 [gh200]
 enabled = true
 
+# DeepSpeed configuration
 [ds_config]
-# Base DeepSpeed settings
-train_micro_batch_size_per_gpu = 1
-gradient_accumulation_steps = 1
-steps_per_print = 1
+zero_optimization = {
+    stage = 2,
+    cpu_offload = true,
+    overlap_comm = true,
+    contiguous_gradients = true,
+    stage3_prefetch_bucket_size = 1e9,
+    stage3_param_persistence_threshold = 1e7,
+    reduce_bucket_size = 1e8,
+    sub_group_size = 1e9,
+    offload_optimizer = {
+        device = "cpu",
+        pin_memory = true,
+        buffer_count = 4,
+        fast_init = true
+    },
+    offload_param = {
+        device = "cpu",
+        pin_memory = true,
+        buffer_count = 5,
+        buffer_size = 1e9,
+        max_in_cpu = 1e9
+    },
+    round_robin_gradients = true
+}
 
-# GH200-specific settings will be automatically applied when gh200.enabled = true
+tensor_parallel = {
+    tp_size = 1,
+    enabled = true,
+    communication_data_type = "bfloat16"
+}
 
-[training]
-epochs = 100
-warmup_steps = 1000
-save_every_n_epochs = 1
-logging_steps = 10
-eval_every_n_steps = 1000
-pipeline_stages = 4
-activation_checkpointing = true
+# Monitoring configuration
+[monitoring]
+wall_clock_breakdown = true
+memory_breakdown = true
+nvlink_monitoring = true
+unified_memory_monitoring = true
+verbose_logging = true
+log_level = "WARNING"
 
-[dataset]
-path = "path/to/your/dataset/config.toml"
+# Optimizer configuration
+[optimizer]
+type = "adamw_optimi"
+lr = 2e-5
+betas = [0.9, 0.99]
+weight_decay = 0.01
+eps = 1e-8
 
-# Optional evaluation datasets
-eval_datasets = []
-
-# Output configuration
-output_dir = "outputs/hunyuan_video_gh200" 
+# Optional: LoRA adapter configuration
+[adapter]
+type = "lora"
+rank = 32
+dtype = "bfloat16"
+# init_from_existing = "/path/to/previous/lora" 

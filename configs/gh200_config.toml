@@ -1,3 +1,30 @@
+# Base GH200 configuration with DeepSpeed optimizations
+output_dir = "outputs/gh200_training"
+dataset = "examples/dataset.toml"
+
+# Training settings
+epochs = 1000
+micro_batch_size_per_gpu = 1
+pipeline_stages = 4
+gradient_accumulation_steps = 4
+gradient_clipping = 1.0
+warmup_steps = 1000
+
+# Evaluation settings
+eval_every_n_epochs = 1
+eval_before_first_step = true
+eval_micro_batch_size_per_gpu = 1
+eval_gradient_accumulation_steps = 1
+
+# Checkpoint settings
+save_every_n_epochs = 2
+checkpoint_every_n_minutes = 120
+activation_checkpointing = true
+partition_method = "parameters"
+save_dtype = "bfloat16"
+caching_batch_size = 1
+steps_per_print = 1
+
 # GH200-specific DeepSpeed configuration
 [ds_config]
 zero_optimization = {
@@ -34,7 +61,7 @@ tensor_parallel = {
 pipeline_parallel = {
     enabled = true,
     partition_method = "type:balanced",
-    pipeline_parallel_size = 1,
+    pipeline_parallel_size = 4,
     async_pipeline = true
 }
 
@@ -50,19 +77,25 @@ memory_optimization = {
 }
 
 # Monitoring configuration
-monitoring = {
-    wall_clock_breakdown = true,
-    memory_breakdown = true,
-    nvlink_monitoring = true,
-    unified_memory_monitoring = true
-}
+[monitoring]
+wall_clock_breakdown = true
+memory_breakdown = true
+nvlink_monitoring = true
+unified_memory_monitoring = true
+verbose_logging = true
+log_level = "WARNING"
 
-# Training parameters
-training = {
-    gradient_clipping = 1.0,
-    dtype = "float16",
-    activation_checkpointing = true,
-    pipeline_stages = 4,
-    micro_batch_size = 1,
-    max_micro_batch_size = 32
-} 
+# Optimizer configuration
+[optimizer]
+type = "adamw_optimi"
+lr = 2e-5
+betas = [0.9, 0.99]
+weight_decay = 0.01
+eps = 1e-8
+
+# Model settings
+[model]
+dtype = "bfloat16"
+transformer_dtype = "float8"  # Optimized for GH200
+guidance = 1.0
+timestep_sample_method = "logit_normal" 
