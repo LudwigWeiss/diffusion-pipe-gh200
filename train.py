@@ -7,6 +7,7 @@ import time
 import random
 import json
 import inspect
+from contextlib import nullcontext
 
 import toml
 import deepspeed
@@ -25,6 +26,8 @@ from utils.common import is_main_process, get_rank, DTYPE_MAP
 import utils.saver
 from utils.isolate_rng import isolate_rng
 from utils.patches import apply_patches
+from utils.monitoring import PerformanceMonitor
+from utils.gh200_monitoring import GH200PerformanceMonitor
 
 TIMESTEP_QUANTILES_FOR_EVAL = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
@@ -91,6 +94,51 @@ def set_config_defaults(config):
     config.setdefault('eval_every_n_steps', None)
     config.setdefault('eval_every_n_epochs', None)
     config.setdefault('eval_before_first_step', True)
+
+    # Add GH200-specific defaults
+    if 'gh200' in config:
+        gh200_config = config['gh200']
+        ds_config = config.get('ds_config', {})
+        
+        # Apply GH200 optimizations if enabled
+        if gh200_config.get('enabled', False):
+            ds_config.setdefault('zero_optimization', {
+                'stage': 2,
+                'cpu_offload': True,
+                'overlap_comm': True,
+                'contiguous_gradients': True,
+                'stage3_prefetch_bucket_size': 1e9,
+                'stage3_param_persistence_threshold': 1e7,
+                'reduce_bucket_size': 1e8,
+                'sub_group_size': 1e9,
+                'offload_optimizer': {
+                    'device': 'cpu',
+                    'pin_memory': True,
+                    'buffer_count': 4,
+                    'fast_init': True
+                },
+                'offload_param': {
+                    'device': 'cpu',
+                    'pin_memory': True,
+                    'buffer_count': 5,
+                    'buffer_size': 1e9,
+                    'max_in_cpu': 1e9
+                },
+                'round_robin_gradients': True
+            })
+            
+            # Add tensor parallel settings
+            ds_config.setdefault('tensor_parallel', {
+                'tp_size': 1,
+                'enabled': True,
+                'communication_data_type': config['model']['dtype']
+            })
+            
+            # Update monitoring settings
+            ds_config.setdefault('wall_clock_breakdown', True)
+            ds_config.setdefault('memory_breakdown', True)
+        
+        config['ds_config'] = ds_config
 
 
 def get_most_recent_run_dir(output_dir):
@@ -452,34 +500,55 @@ if __name__ == '__main__':
     # TODO: this is state we need to save and resume when resuming from checkpoint. It only affects logging.
     epoch_loss = 0
     num_steps = 0
+
+    # Initialize performance monitoring based on config
+    if config.get('gh200', {}).get('enabled', False):
+        performance_monitor = GH200PerformanceMonitor(tb_writer) if is_main_process() else None
+    else:
+        performance_monitor = PerformanceMonitor(tb_writer) if is_main_process() else None
+
     while True:
-        #empty_cuda_cache()
-        model_engine.reset_activation_shape()
-        loss = model_engine.train_batch().item()
-        epoch_loss += loss
-        num_steps += 1
-        train_dataloader.sync_epoch()
-
-        new_epoch = saver.process_epoch(epoch, step)
-        finished_epoch = True if new_epoch != epoch else False
-
-        if is_main_process() and step % config['logging_steps'] == 0:
-            tb_writer.add_scalar(f'train/loss', loss, step)
-
-        if (config['eval_every_n_steps'] and step % config['eval_every_n_steps'] == 0) or (finished_epoch and config['eval_every_n_epochs'] and epoch % config['eval_every_n_epochs'] == 0):
-            evaluate(model_engine, eval_dataloaders, tb_writer, step, config['eval_gradient_accumulation_steps'])
-
-        if finished_epoch:
+        with performance_monitor.track_step(step) if is_main_process() else nullcontext():
+            model_engine.reset_activation_shape()
+            loss = model_engine.train_batch().item()
+            
             if is_main_process():
-                tb_writer.add_scalar(f'train/epoch_loss', epoch_loss/num_steps, epoch)
-            epoch_loss = 0
-            num_steps = 0
-            epoch = new_epoch
-            if epoch is None:
-                break
+                # Update basic metrics
+                performance_monitor.update(step, loss, optimizer.param_groups[0]['lr'], time.time() - performance_monitor.step_start_time)
+                
+                # Log gradient and memory stats
+                performance_monitor.log_gradient_norm(model_engine, step)
+                performance_monitor.log_memory_stats(step)
+                
+                # Log GH200-specific metrics if enabled
+                if isinstance(performance_monitor, GH200PerformanceMonitor):
+                    performance_monitor.log_pipeline_stats(model_engine, step)
+                    performance_monitor.log_communication_stats(step)
+            
+            epoch_loss += loss
+            num_steps += 1
+            train_dataloader.sync_epoch()
 
-        saver.process_step(step)
-        step += 1
+            new_epoch = saver.process_epoch(epoch, step)
+            finished_epoch = True if new_epoch != epoch else False
+
+            if is_main_process() and step % config['logging_steps'] == 0:
+                tb_writer.add_scalar(f'train/loss', loss, step)
+
+            if (config['eval_every_n_steps'] and step % config['eval_every_n_steps'] == 0) or (finished_epoch and config['eval_every_n_epochs'] and epoch % config['eval_every_n_epochs'] == 0):
+                evaluate(model_engine, eval_dataloaders, tb_writer, step, config['eval_gradient_accumulation_steps'])
+
+            if finished_epoch:
+                if is_main_process():
+                    tb_writer.add_scalar(f'train/epoch_loss', epoch_loss/num_steps, epoch)
+                epoch_loss = 0
+                num_steps = 0
+                epoch = new_epoch
+                if epoch is None:
+                    break
+
+            saver.process_step(step)
+            step += 1
 
     if is_main_process():
         print('TRAINING COMPLETE!')

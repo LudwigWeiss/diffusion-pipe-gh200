@@ -1,0 +1,68 @@
+# GH200-specific DeepSpeed configuration
+[ds_config]
+zero_optimization = {
+    stage = 2,
+    cpu_offload = true,
+    overlap_comm = true,
+    contiguous_gradients = true,
+    stage3_prefetch_bucket_size = 1e9,
+    stage3_param_persistence_threshold = 1e7,
+    reduce_bucket_size = 1e8,
+    sub_group_size = 1e9,
+    offload_optimizer = {
+        device = "cpu",
+        pin_memory = true,
+        buffer_count = 4,
+        fast_init = true
+    },
+    offload_param = {
+        device = "cpu",
+        pin_memory = true,
+        buffer_count = 5,
+        buffer_size = 1e9,
+        max_in_cpu = 1e9
+    },
+    round_robin_gradients = true
+}
+
+tensor_parallel = {
+    tp_size = 1,
+    enabled = true
+}
+
+# Pipeline configuration
+pipeline_parallel = {
+    enabled = true,
+    partition_method = "type:balanced",
+    pipeline_parallel_size = 1,
+    async_pipeline = true
+}
+
+# Memory optimization
+memory_optimization = {
+    initial_scale = 2^16,
+    min_scale = 1,
+    growth_factor = 2,
+    backoff_factor = 0.5,
+    max_scale = 2^32,
+    hysteresis = 2,
+    max_reserved_memory = 1e9
+}
+
+# Monitoring configuration
+monitoring = {
+    wall_clock_breakdown = true,
+    memory_breakdown = true,
+    nvlink_monitoring = true,
+    unified_memory_monitoring = true
+}
+
+# Training parameters
+training = {
+    gradient_clipping = 1.0,
+    dtype = "float16",
+    activation_checkpointing = true,
+    pipeline_stages = 4,
+    micro_batch_size = 1,
+    max_micro_batch_size = 32
+} 

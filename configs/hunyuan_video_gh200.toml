@@ -1,0 +1,34 @@
+# HunyuanVideo configuration with GH200 optimizations
+[model]
+type = "hunyuan-video"
+dtype = "float16"
+transformer_dtype = "float16"
+
+[gh200]
+enabled = true
+
+[ds_config]
+# Base DeepSpeed settings
+train_micro_batch_size_per_gpu = 1
+gradient_accumulation_steps = 1
+steps_per_print = 1
+
+# GH200-specific settings will be automatically applied when gh200.enabled = true
+
+[training]
+epochs = 100
+warmup_steps = 1000
+save_every_n_epochs = 1
+logging_steps = 10
+eval_every_n_steps = 1000
+pipeline_stages = 4
+activation_checkpointing = true
+
+[dataset]
+path = "path/to/your/dataset/config.toml"
+
+# Optional evaluation datasets
+eval_datasets = []
+
+# Output configuration
+output_dir = "outputs/hunyuan_video_gh200" 
