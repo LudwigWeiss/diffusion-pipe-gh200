@@ -297,9 +297,9 @@ If you use this project in your research, please cite:
 ```bibtex
 @software{diffusion_pipe_gh200,
   title = {Diffusion-Pipe GH200},
-  author = {Your Organization},
-  year = {2024},
-  url = {https://github.com/your-org/diffusion-pipe-gh200},
+  author = {Ludwig Weiss},
+  year = {2025},
+  url = {https://github.com/LudwigWeiss/diffusion-pipe-gh200},
   description = {High-performance diffusion model training pipeline optimized for NVIDIA GH200}
 }
 ```
