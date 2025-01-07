@@ -207,7 +207,7 @@ def track_step(self, step):
 2. Installation
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/diffusion-pipe-gh200
+git clone https://github.com/LudwigWeiss/diffusion-pipe-gh200
 cd diffusion-pipe-gh200
 
 # Install dependencies
