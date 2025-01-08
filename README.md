@@ -289,7 +289,7 @@ Available metrics:
 
 ## License
 
-This project is licensed under [LICENSE]. See the LICENSE file for details.
+This project is licensed under MIT License. See the LICENSE file for details.
 
 ## Citation
 
